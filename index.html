@@ -1,0 +1,476 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  LayoutDashboard, 
+  Repeat, 
+  PlusCircle, 
+  History, 
+  TrendingUp, 
+  AlertCircle, 
+  CheckCircle2, 
+  RefreshCw, 
+  ShoppingBag, 
+  Trash2, 
+  X,
+  Plus,
+  CalendarDays,
+  AlertTriangle
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs } from 'firebase/firestore';
+
+// --- CONFIGURACIÓN DE FIREBASE ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'ahorraya-v3-final';
+
+// Recreación exacta del logo
+const AhorraYALogo = ({ className }) => (
+  <svg viewBox="0 0 100 100" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="50" cy="50" r="46" stroke="currentColor" strokeWidth="5"/>
+    <g transform="translate(42, 18) rotate(-10)">
+      <rect width="26" height="34" rx="2" fill="currentColor" />
+      <circle cx="12" cy="12" r="4" fill="#1a1b1e" opacity="0.9" />
+      <circle cx="13" cy="22" r="6" fill="#1a1b1e" opacity="0.7" />
+    </g>
+    <rect x="24" y="44" width="52" height="38" rx="10" fill="currentColor" />
+    <rect x="29" y="44" width="42" height="3.5" rx="1.5" fill="#1a1b1e" />
+  </svg>
+);
+
+const App = () => {
+  const [view, setView] = useState('setup');
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [showConfirmArchive, setShowConfirmArchive] = useState(false);
+  
+  const [deleteDialog, setDeleteDialog] = useState({ 
+    isOpen: false, 
+    type: null, 
+    id: null, 
+    title: '' 
+  });
+
+  // --- ESTADOS DE DATOS ---
+  const [income, setIncome] = useState('');
+  const [fixedExpenses, setFixedExpenses] = useState('');
+  const [savingsTarget, setSavingsTarget] = useState('');
+  const [expensesList, setExpensesList] = useState([]);
+  const [habitualProducts, setHabitualProducts] = useState([]);
+  const [historyList, setHistoryList] = useState([]);
+  const [totalSavedOverall, setTotalSavedOverall] = useState(0);
+
+  // --- ESTADOS TEMPORALES DE FORMULARIOS ---
+  const [tempHabitName, setTempHabitName] = useState('');
+  const [tempHabitAmount, setTempHabitAmount] = useState('');
+  const [tempExpName, setTempExpName] = useState('');
+  const [tempExpAmount, setTempExpAmount] = useState('');
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const settingsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'main');
+    const unsubSettings = onSnapshot(settingsRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setIncome(data.income || '');
+        setFixedExpenses(data.fixedExpenses || '');
+        setSavingsTarget(data.savingsTarget || '');
+      }
+    });
+
+    const expensesRef = collection(db, 'artifacts', appId, 'users', user.uid, 'expenses');
+    const unsubExpenses = onSnapshot(expensesRef, (snap) => {
+      const list = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      setExpensesList(list.sort((a,b) => b.timestamp - a.timestamp));
+    });
+
+    const habitsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'habits');
+    const unsubHabits = onSnapshot(habitsRef, (snap) => {
+      const list = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      setHabitualProducts(list);
+    });
+
+    const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
+    const unsubHistory = onSnapshot(historyRef, (snap) => {
+      const list = [];
+      let total = 0;
+      snap.forEach(d => {
+        const data = d.data();
+        list.push({ id: d.id, ...data });
+        total += (data.savingsAchieved || 0);
+      });
+      setHistoryList(list.sort((a,b) => b.timestamp - a.timestamp));
+      setTotalSavedOverall(total);
+    });
+
+    return () => {
+      unsubSettings();
+      unsubExpenses();
+      unsubHabits();
+      unsubHistory();
+    };
+  }, [user]);
+
+  const incVal = parseFloat(income) || 0;
+  const fixedVal = parseFloat(fixedExpenses) || 0;
+  const savVal = parseFloat(savingsTarget) || 0;
+  const currentSpent = expensesList.reduce((acc, curr) => acc + curr.amount, 0);
+  const weeklyRemaining = incVal - fixedVal - savVal - currentSpent;
+  const dailyLuxury = weeklyRemaining / 7;
+  const isNegative = weeklyRemaining < 0;
+
+  const saveBaseSettings = async (inc, fix, sav) => {
+    if (!user) return;
+    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'main'), {
+      income: inc, fixedExpenses: fix, savingsTarget: sav
+    });
+  };
+
+  const addExpense = async (name, amount) => {
+    if (!user || !name || !amount) return;
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'), {
+      name,
+      amount: parseFloat(amount),
+      timestamp: Date.now(),
+      date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    });
+    setTempExpName('');
+    setTempExpAmount('');
+  };
+
+  const addHabit = async () => {
+    if (!user || !tempHabitName || !tempHabitAmount) return;
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'habits'), {
+      name: tempHabitName,
+      amount: parseFloat(tempHabitAmount)
+    });
+    setTempHabitName('');
+    setTempHabitAmount('');
+  };
+
+  const confirmDelete = async () => {
+    if (!user) return;
+    const { type, id } = deleteDialog;
+    const pathMap = {
+      'expense': 'expenses',
+      'habit': 'habits',
+      'history': 'history'
+    };
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, pathMap[type], id));
+    setDeleteDialog({ isOpen: false, type: null, id: null, title: '' });
+  };
+
+  const handleArchiveWeek = async () => {
+    if (!user) return;
+    const achieved = savVal + weeklyRemaining;
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
+      dateRange: `Semana ${new Date().toLocaleDateString()}`,
+      savingsAchieved: achieved,
+      totalSpent: fixedVal + currentSpent,
+      isPenalty: weeklyRemaining < 0,
+      timestamp: Date.now()
+    });
+    const snapshot = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'));
+    const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'expenses', d.id)));
+    await Promise.all(deletePromises);
+    setShowConfirmArchive(false);
+    setView('history');
+  };
+
+  const formatCurrency = (num) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(num);
+
+  // Helper de tamaño dinámico mejorado
+  const getDynamicFontSize = (value, baseSize, limit = 8) => {
+    const length = value.toString().length;
+    if (length <= limit) return baseSize;
+    if (length <= limit + 3) return `${parseFloat(baseSize) * 0.75}rem`;
+    if (length <= limit + 6) return `${parseFloat(baseSize) * 0.6}rem`;
+    return `${parseFloat(baseSize) * 0.45}rem`;
+  };
+
+  if (loading) return (
+    <div className="min-h-screen bg-[#1a1b1e] flex flex-col items-center justify-center text-white font-black animate-pulse">
+      <AhorraYALogo className="w-24 h-24 mb-6" />
+      <span className="tracking-[0.5em] text-[12px]">CARGANDO DATOS</span>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#0f0f11] text-slate-100 font-sans selection:bg-white/10 overflow-hidden flex flex-col">
+      
+      <header className="sticky top-0 z-50 bg-[#1a1b1e]/98 backdrop-blur-3xl border-b border-white/20 px-6 pt-[calc(env(safe-area-inset-top,2rem)+0.8rem)] pb-6 flex flex-col items-center shadow-2xl">
+        <div className="w-full max-w-md flex items-center justify-between">
+          <div className="flex items-center gap-2.5 -ml-1">
+            <div className="bg-white p-1.5 rounded-[1.2rem] shadow-2xl shrink-0">
+              <AhorraYALogo className="w-8 h-8 text-[#1a1b1e]" />
+            </div>
+            <h1 className="text-2xl font-black text-white tracking-tight leading-none">AhorraYA</h1>
+          </div>
+          <div className="flex items-center gap-2 border px-4 py-2.5 rounded-full bg-white/10 border-white/30 text-white shadow-xl shrink-0">
+            <TrendingUp className={`w-4 h-4 ${totalSavedOverall < 0 ? 'rotate-180 text-red-500' : 'text-white'}`} />
+            <span className="text-[12px] font-black tracking-tighter">{formatCurrency(totalSavedOverall)}</span>
+          </div>
+        </div>
+
+        <nav className="flex bg-black/80 p-1.5 rounded-[2.2rem] border border-white/10 w-full max-w-md mt-6 shadow-inner">
+          {[
+            { id: 'setup', icon: LayoutDashboard, label: 'BASE' },
+            { id: 'habits', icon: Repeat, label: 'HÁBITOS' },
+            { id: 'tracking', icon: PlusCircle, label: 'GASTOS' },
+            { id: 'history', icon: History, label: 'LOGROS' }
+          ].map(btn => (
+            <button 
+              key={btn.id}
+              onClick={() => setView(btn.id)}
+              className={`flex-1 flex flex-col items-center gap-1 py-3.5 rounded-[1.8rem] transition-all duration-300 ${view === btn.id ? 'bg-white text-black shadow-2xl scale-[1.02]' : 'text-slate-500 hover:text-white'}`}
+            >
+              <btn.icon className="w-4 h-4" />
+              <span className="text-[9px] font-black uppercase tracking-[0.12em]">{btn.label}</span>
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      <main className="w-full max-w-md mx-auto p-6 space-y-8 flex-1 overflow-y-auto pb-[240px]">
+
+        {/* VISTA: BASE */}
+        {view === 'setup' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-6">
+            <div className="bg-[#2a2b30] border border-white/20 p-8 rounded-[3.5rem] space-y-7 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+              <h2 className="text-[12px] font-black text-white uppercase tracking-widest opacity-60">Configuración</h2>
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-2 uppercase ml-3 tracking-widest">Ingreso Semanal</label>
+                  <input type="number" inputMode="decimal" value={income} onChange={e => { setIncome(e.target.value); saveBaseSettings(e.target.value, fixedExpenses, savingsTarget); }} className="w-full bg-black/60 border border-white/20 rounded-[2rem] py-5 px-7 outline-none text-3xl font-black text-white placeholder:text-slate-800 shadow-inner" placeholder="0" />
+                </div>
+                <div className="grid grid-cols-2 gap-5">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-2 uppercase ml-3 tracking-widest">Gastos Fijos</label>
+                    <input type="number" inputMode="decimal" value={fixedExpenses} onChange={e => { setFixedExpenses(e.target.value); saveBaseSettings(income, e.target.value, savingsTarget); }} className="w-full bg-black/60 border border-white/20 rounded-[1.5rem] py-5 px-6 outline-none text-xl font-bold text-white shadow-inner" placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 mb-2 uppercase ml-3 tracking-widest">Ahorro</label>
+                    <input type="number" inputMode="decimal" value={savingsTarget} onChange={e => { setSavingsTarget(e.target.value); saveBaseSettings(income, fixedExpenses, e.target.value); }} className="w-full bg-black/60 border border-white/20 rounded-[1.5rem] py-5 px-6 outline-none text-xl font-bold text-white shadow-inner" placeholder="0" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-[#2a2b30] border border-white/20 p-8 rounded-[3.5rem] shadow-xl text-center">
+               <CalendarDays className="w-8 h-8 text-white/40 mx-auto mb-4" />
+               <button onClick={() => setShowConfirmArchive(true)} className="w-full bg-white text-black font-black py-6 rounded-[2rem] active:scale-95 transition-all shadow-2xl">
+                 <RefreshCw className="w-4 h-4 inline mr-2" /> COMENZAR SEMANA NUEVA
+               </button>
+            </div>
+          </div>
+        )}
+
+        {/* VISTA: HABITOS */}
+        {view === 'habits' && (
+          <div className="space-y-8 animate-in slide-in-from-right-6">
+            <div className="bg-[#2a2b30] border border-white/20 p-8 rounded-[3.5rem] space-y-6 shadow-2xl">
+              <h2 className="text-[11px] font-black text-white uppercase tracking-[0.3em] ml-1">Nuevo Atajo</h2>
+              <div className="space-y-4">
+                <input type="text" placeholder="Concepto (ej. Café)" value={tempHabitName} onChange={e => setTempHabitName(e.target.value)} className="w-full bg-black/60 border border-white/20 rounded-[1.5rem] py-5 px-6 text-white outline-none focus:border-white/50" />
+                <input type="number" inputMode="decimal" placeholder="Monto $" value={tempHabitAmount} onChange={e => setTempHabitAmount(e.target.value)} className="w-full bg-black/60 border border-white/20 rounded-[1.5rem] py-5 px-6 text-white outline-none focus:border-white/50" />
+              </div>
+              <button onClick={addHabit} className="w-full bg-white text-black font-black py-5 rounded-[2rem] active:scale-95 transition-transform">AGREGAR A LA LISTA</button>
+            </div>
+            <div className="grid grid-cols-2 gap-5">
+              {habitualProducts.map(p => (
+                <div key={p.id} className="relative group">
+                  <button onClick={() => addExpense(p.name, p.amount)} className="w-full bg-[#2a2b30] border border-white/15 p-7 rounded-[2.8rem] text-left active:scale-[0.9] transition-all shadow-2xl h-48 flex flex-col justify-between overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-3xl group-active:bg-white/10"></div>
+                    <div className="min-w-0 pr-2">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 truncate">{p.name}</span>
+                      {/* TAMAÑO DINÁMICO EN HÁBITOS */}
+                      <span 
+                        className="font-black text-white tracking-tighter transition-all block truncate" 
+                        style={{ fontSize: getDynamicFontSize(formatCurrency(p.amount).replace('MXN',''), '1.5rem', 6) }}
+                      >
+                        {formatCurrency(p.amount).replace('MXN','')}
+                      </span>
+                    </div>
+                    <div className="text-[9px] font-black bg-white/20 text-white py-2.5 px-5 rounded-full w-fit border border-white/10 uppercase tracking-widest z-10">PAGAR</div>
+                  </button>
+                  <button onClick={() => setDeleteDialog({ isOpen: true, type: 'habit', id: p.id, title: p.name })} className="absolute top-4 right-4 p-2 text-slate-600 hover:text-red-500 transition-colors">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* VISTA: GASTOS */}
+        {view === 'tracking' && (
+          <div className="space-y-8 animate-in slide-in-from-left-6">
+            <div className="bg-[#2a2b30] border border-white/20 p-8 rounded-[3.5rem] space-y-6 shadow-2xl">
+              <h2 className="text-[11px] font-black text-white uppercase tracking-[0.3em] ml-1">Gasto Único</h2>
+              <div className="space-y-4">
+                <input type="text" placeholder="¿En qué gastaste?" value={tempExpName} onChange={e => setTempExpName(e.target.value)} className="w-full bg-black/60 border border-white/20 rounded-[1.5rem] py-5 px-7 text-white outline-none focus:border-white/50" />
+                <input type="number" inputMode="decimal" placeholder="Monto $" value={tempExpAmount} onChange={e => setTempExpAmount(e.target.value)} className="w-full bg-black/60 border border-white/20 rounded-[1.5rem] py-5 px-7 text-white outline-none focus:border-white/50" />
+              </div>
+              <button onClick={() => addExpense(tempExpName, tempExpAmount)} className="w-full bg-white text-black font-black py-5 rounded-[2rem] active:scale-95 transition-transform">REGISTRAR AHORA</button>
+            </div>
+            <div className="space-y-4">
+              <h3 className="text-[10px] font-black text-slate-600 uppercase tracking-[0.4em] ml-4">Historial de la Semana</h3>
+              {expensesList.map(e => (
+                <div key={e.id} className="flex justify-between items-center bg-[#2a2b30] border border-white/10 p-7 rounded-[2.2rem] shadow-xl animate-in fade-in">
+                  <div className="min-w-0 pr-4">
+                    <p className="font-black text-white text-lg tracking-tight truncate">{e.name}</p>
+                    <p className="text-[10px] text-slate-500 font-black uppercase mt-1">{e.date}</p>
+                  </div>
+                  <div className="flex items-center gap-6 shrink-0">
+                    {/* TAMAÑO DINÁMICO EN LISTA DE GASTOS */}
+                    <p 
+                      className="font-black text-white tracking-tighter"
+                      style={{ fontSize: getDynamicFontSize(formatCurrency(e.amount).replace('MXN',''), '1.25rem', 7) }}
+                    >
+                      -{formatCurrency(e.amount).replace('MXN','')}
+                    </p>
+                    <button onClick={() => setDeleteDialog({ isOpen: true, type: 'expense', id: e.id, title: e.name })} className="p-2 bg-black/20 rounded-xl hover:bg-red-500/20 text-slate-700 hover:text-red-400 transition-all">
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* VISTA: LOGROS */}
+        {view === 'history' && (
+          <div className="space-y-8 animate-in zoom-in-98">
+            <div className={`p-10 rounded-[4rem] text-center shadow-[0_30px_70px_rgba(0,0,0,0.8)] border border-white/20 relative overflow-hidden transition-all duration-1000 ${totalSavedOverall >= 0 ? 'bg-black/80' : 'bg-red-950/40'}`}>
+              <div className={`absolute top-0 right-0 w-60 h-60 rounded-full blur-[110px] opacity-10 ${totalSavedOverall >= 0 ? 'bg-white' : 'bg-red-500'}`}></div>
+              <p className="text-[11px] font-black text-white uppercase tracking-[0.5em] mb-4 opacity-40">Ahorro Neto Acumulado</p>
+              <h2 className="font-black text-white tracking-tighter drop-shadow-2xl transition-all duration-300 break-all" style={{ fontSize: getDynamicFontSize(formatCurrency(totalSavedOverall), '4.5rem') }}>{formatCurrency(totalSavedOverall)}</h2>
+              <div className={`mt-8 inline-flex items-center gap-3 px-6 py-2.5 rounded-full text-[12px] font-black uppercase tracking-widest border transition-all ${totalSavedOverall >= 0 ? 'bg-white/10 text-white border-white/30' : 'bg-red-500/10 text-red-400 border-red-500/30'}`}>
+                {totalSavedOverall >= 0 ? <TrendingUp className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                {totalSavedOverall >= 0 ? 'Sigues sumando' : 'Debes reajustar'}
+              </div>
+            </div>
+            <div className="space-y-5">
+              {historyList.map(h => (
+                <div key={h.id} className="bg-[#2a2b30] border border-white/15 p-7 rounded-[2.8rem] flex items-center justify-between shadow-2xl relative group">
+                  <div className="flex items-center gap-6 min-w-0 pr-4">
+                    <div className={`p-4 rounded-3xl border shrink-0 ${h.isPenalty ? 'bg-red-500/10 text-red-400 border-red-500/40' : 'bg-white/5 text-white border-white/30'}`}>
+                      {h.isPenalty ? <AlertCircle className="w-7 h-7" /> : <CheckCircle2 className="w-7 h-7" />}
+                    </div>
+                    <div className="truncate">
+                      <p className="text-[13px] font-black text-white uppercase tracking-tight truncate">{h.dateRange}</p>
+                      <p className="text-[11px] text-slate-500 font-bold mt-1">Gasto: {formatCurrency(h.totalSpent)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 shrink-0">
+                    <div className="text-right">
+                      <p className={`font-black tracking-tighter ${h.savingsAchieved >= 0 ? 'text-white' : 'text-red-400'}`} style={{ fontSize: getDynamicFontSize(formatCurrency(h.savingsAchieved).replace('MXN',''), '1.5rem', 7) }}>
+                        {h.savingsAchieved >= 0 ? '+' : ''}{formatCurrency(h.savingsAchieved).replace('MXN','')}
+                      </p>
+                    </div>
+                    <button onClick={() => setDeleteDialog({ isOpen: true, type: 'history', id: h.id, title: h.dateRange })} className="p-2 bg-red-500/10 rounded-xl text-red-500/50 hover:text-red-500 hover:bg-red-500/20 transition-all">
+                        <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* DASHBOARD FLOTANTE */}
+      <section className={`fixed bottom-0 left-0 w-full px-6 pb-[calc(env(safe-area-inset-bottom,1.5rem)+1rem)] transition-all duration-1000 z-50 ${income !== '0' ? 'translate-y-0 opacity-100' : 'translate-y-48 opacity-0'}`}>
+        <div className={`p-8 rounded-[4rem] shadow-[0_-30px_90px_-15px_rgba(0,0,0,1)] border border-white/20 backdrop-blur-3xl max-w-md mx-auto relative overflow-hidden ${isNegative ? 'bg-red-950/98' : 'bg-[#0f0f11]/98'}`}>
+          <div className="flex items-center justify-between relative z-10">
+            <div className="flex-1 min-w-0 pr-4">
+              <p className={`text-[11px] font-black uppercase tracking-[0.3em] mb-2.5 ${isNegative ? 'text-red-500' : 'text-white opacity-40'}`}>
+                {isNegative ? 'Límite Excedido' : 'Presupuesto Diario'}
+              </p>
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <h2 className="font-black text-white tracking-tighter break-all transition-all duration-300" style={{ fontSize: getDynamicFontSize(formatCurrency(isNegative ? Math.abs(weeklyRemaining) : dailyLuxury).replace('MXN',''), '3rem') }}>
+                  {formatCurrency(isNegative ? Math.abs(weeklyRemaining) : dailyLuxury).replace('MXN','')}
+                </h2>
+                <span className="text-[10px] font-black opacity-20 text-white tracking-[0.2em] uppercase shrink-0">Sobra: {formatCurrency(weeklyRemaining).replace('MXN','')}</span>
+              </div>
+            </div>
+            <button onClick={() => setView('tracking')} className={`p-6 rounded-[2.2rem] transition-all active:scale-90 border shadow-2xl shrink-0 ${isNegative ? 'bg-red-600 border-red-500 text-white shadow-red-900/50' : 'bg-white border-white text-black shadow-white/20'}`}>
+              <ShoppingBag className="w-9 h-9"/>
+            </button>
+          </div>
+          <div className="w-full h-3 bg-white/10 rounded-full mt-7 overflow-hidden relative border border-white/5 shadow-inner">
+            <div className={`h-full transition-all duration-1000 ${isNegative ? 'bg-red-600 w-full shadow-[0_0_20px_rgba(220,38,38,0.8)]' : 'bg-white shadow-[0_0_20px_rgba(255,255,255,0.5)]'}`} style={{ width: isNegative ? '100%' : `${Math.min((dailyLuxury / (incVal/7 || 1)) * 100, 100)}%` }}></div>
+          </div>
+        </div>
+      </section>
+
+      {/* MODAL DE CONFIRMACIÓN DE ARCHIVO */}
+      {showConfirmArchive && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-[#2a2b30] border border-white/20 p-8 rounded-[3.5rem] w-full max-w-sm shadow-2xl space-y-6 text-center animate-in zoom-in-95 duration-300">
+             <AhorraYALogo className="w-12 h-12 mx-auto text-white" />
+             <div className="space-y-2">
+               <h3 className="text-xl font-black text-white">¿Archivar Semana?</h3>
+               <p className="text-sm text-slate-400">Tus gastos actuales se borrarán y el balance se guardará permanentemente en la nube.</p>
+             </div>
+             <div className="flex gap-4">
+               <button onClick={() => setShowConfirmArchive(false)} className="flex-1 py-4 bg-white/10 text-white rounded-2xl font-bold active:scale-95">VOLVER</button>
+               <button onClick={handleArchiveWeek} className="flex-[2] py-4 bg-white text-black rounded-2xl font-black shadow-xl active:scale-95">SÍ, ARCHIVAR</button>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE ELIMINACIÓN */}
+      {deleteDialog.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-[#2a2b30] border border-red-500/20 p-8 rounded-[3.5rem] w-full max-w-sm shadow-2xl space-y-6 text-center animate-in zoom-in-95 duration-300">
+             <div className="w-14 h-14 bg-red-500/10 rounded-full flex items-center justify-center mx-auto">
+               <AlertTriangle className="w-7 h-7 text-red-500" />
+             </div>
+             <div className="space-y-2">
+               <h3 className="text-xl font-black text-white uppercase tracking-tight">¿Eliminar {
+                 deleteDialog.type === 'expense' ? 'Gasto' : 
+                 deleteDialog.type === 'habit' ? 'Hábito' : 'Semana'
+               }?</h3>
+               <p className="text-sm text-slate-400">Estás por borrar permanentemente de la nube: <span className="text-white font-bold">"{deleteDialog.title}"</span>.</p>
+             </div>
+             <div className="flex gap-4 pt-2">
+               <button onClick={() => setDeleteDialog({ isOpen: false, type: null, id: null, title: '' })} className="flex-1 py-4 bg-white/10 text-white rounded-2xl font-bold active:scale-95">CANCELAR</button>
+               <button onClick={confirmDelete} className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-black shadow-lg active:scale-95">SÍ, ELIMINAR</button>
+             </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes fade-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: 500ms cubic-bezier(0.4, 0, 0.2, 1) both; }
+        ::-webkit-scrollbar { width: 0px; }
+      `}</style>
+    </div>
+  );
+};
+
+export default App;

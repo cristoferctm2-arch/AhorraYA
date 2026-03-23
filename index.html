@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- Configuración para iPhone -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AhorraYA">
+    <link rel="apple-touch-icon" href="logo.png">
+
+    <title>AhorraYA</title>
+
+    <!-- Librerías Externas -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.FB = { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, query };
+    </script>
+
+    <style>
+        :root { 
+            --sat: env(safe-area-inset-top); 
+            --sab: env(safe-area-inset-bottom); 
+        }
+        body { 
+            background: #0f0f11;
+            margin: 0;
+            color: white;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .safe-top { padding-top: calc(var(--sat, 44px) + 24px); }
+        .safe-bottom { padding-bottom: calc(var(--sab, 34px) + 12px); }
+        
+        .glass-header { background: rgba(22, 22, 26, 0.98); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        ::-webkit-scrollbar { width: 0px; }
+        
+        .animate-in { animation: slide-up 0.3s ease-out both; }
+        @keyframes slide-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        button:active { transform: scale(0.96); opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        
+        const Icons = {
+            setup: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>,
+            habits: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>,
+            tracking: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>,
+            history: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>,
+            trending: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>,
+            trash: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>,
+            x: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>,
+            refresh: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>,
+            alert: () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>,
+            check: () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        };
+
+        const AhorraYALogo = ({ className }) => (
+            <svg viewBox="0 0 100 100" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="50" cy="50" r="46" stroke="white" strokeWidth="5"/>
+                <g transform="translate(42, 18) rotate(-10)">
+                    <rect width="26" height="34" rx="2" fill="white" />
+                    <circle cx="6" cy="6" r="3" fill="#1a1b1e" />
+                    <circle cx="20" cy="28" r="3" fill="#1a1b1e" />
+                </g>
+                <rect x="24" y="44" width="52" height="38" rx="10" fill="white" />
+                <rect x="29" y="44" width="42" height="3.5" rx="1.5" fill="#1a1b1e" />
+            </svg>
+        );
+
+        const App = () => {
+            const [view, setView] = useState('setup');
+            const [user, setUser] = useState(null);
+            const [db, setDb] = useState(null);
+            const [loading, setLoading] = useState(true);
+            
+            const [income, setIncome] = useState('');
+            const [fixedExpenses, setFixedExpenses] = useState('');
+            const [savingsTarget, setSavingsTarget] = useState('');
+            const [expensesList, setExpensesList] = useState([]);
+            const [habitualProducts, setHabitualProducts] = useState([]);
+            const [historyList, setHistoryList] = useState([]);
+
+            const [showConfirmArchive, setShowConfirmArchive] = useState(false);
+            const [deleteDialog, setDeleteDialog] = useState({ isOpen: false, type: null, id: null, title: '' });
+            const [tempHabit, setTempHabit] = useState({ name: '', amount: '' });
+            const [tempExp, setTempExp] = useState({ name: '', amount: '' });
+
+            const appId = 'ahorraya-v7-stable';
+
+            useEffect(() => {
+                const init = async () => {
+                    try {
+                        if (!window.FB) { setLoading(false); return; }
+                        const { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, getFirestore, signInWithCustomToken } = window.FB;
+                        const config = window.__firebase_config ? JSON.parse(window.__firebase_config) : { apiKey: "demo", projectId: "demo" };
+                        const app = initializeApp(config);
+                        const auth = getAuth(app);
+                        const firestore = getFirestore(app);
+                        setDb(firestore);
+                        if (window.__initial_auth_token) await signInWithCustomToken(auth, window.__initial_auth_token);
+                        else await signInAnonymously(auth);
+                        onAuthStateChanged(auth, (u) => { setUser(u || { uid: 'local-user' }); setLoading(false); });
+                        setTimeout(() => setLoading(false), 2500);
+                    } catch (e) { setLoading(false); }
+                };
+                init();
+            }, []);
+
+            useEffect(() => {
+                if (!user || !db || user.uid === 'local-user') return;
+                const { doc, onSnapshot, collection } = window.FB;
+                const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'main'), (snap) => {
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        setIncome(d.income || ''); setFixedExpenses(d.fixedExpenses || ''); setSavingsTarget(d.savingsTarget || '');
+                    }
+                });
+                const unsubExp = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'), (snap) => {
+                    const list = [];
+                    snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+                    setExpensesList(list.sort((a,b) => b.timestamp - a.timestamp));
+                });
+                const unsubHabits = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'habits'), (snap) => {
+                    const list = [];
+                    snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+                    setHabitualProducts(list);
+                });
+                const unsubHist = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), (snap) => {
+                    const list = [];
+                    snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+                    setHistoryList(list.sort((a,b) => b.timestamp - a.timestamp));
+                });
+                return () => { unsubSettings(); unsubExp(); unsubHabits(); unsubHist(); };
+            }, [user, db]);
+
+            const totalSavedOverall = useMemo(() => historyList.reduce((acc, curr) => acc + (curr.savingsAchieved || 0), 0), [historyList]);
+            const spentTotal = useMemo(() => expensesList.reduce((acc, curr) => acc + curr.amount, 0), [expensesList]);
+            const weeklyRem = useMemo(() => (parseFloat(income)||0) - (parseFloat(fixedExpenses)||0) - (parseFloat(savingsTarget)||0) - spentTotal, [income, fixedExpenses, savingsTarget, spentTotal]);
+            const daily = weeklyRem / 7;
+            const isNegative = weeklyRem < 0;
+
+            const formatCurrency = (num) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(num);
+
+            const getDynamicFontSize = (value, baseSize, limit = 9) => {
+                const len = value.toString().length;
+                if (len <= limit) return baseSize;
+                if (len <= limit + 3) return `${parseFloat(baseSize) * 0.75}rem`;
+                return `${parseFloat(baseSize) * 0.55}rem`;
+            };
+
+            const handleAddExpense = async (name, amount) => {
+                if (!name || !amount) return;
+                const val = parseFloat(amount);
+                const timestamp = Date.now();
+                setExpensesList([{ id: timestamp, name, amount: val, date: 'Hoy', timestamp }, ...expensesList]);
+                setTempExp({ name: '', amount: '' });
+                if (user && db && user.uid !== 'local-user') {
+                    await window.FB.addDoc(window.FB.collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'), { name, amount: val, timestamp, date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+                }
+            };
+
+            const handleAddHabit = async () => {
+                if (!tempHabit.name || !tempHabit.amount) return;
+                const val = parseFloat(tempHabit.amount);
+                const timestamp = Date.now();
+                setHabitualProducts([{ id: timestamp, name: tempHabit.name, amount: val }, ...habitualProducts]);
+                setTempHabit({ name: '', amount: '' });
+                if (user && db && user.uid !== 'local-user') await window.FB.addDoc(window.FB.collection(db, 'artifacts', appId, 'users', user.uid, 'habits'), { name: tempHabit.name, amount: val });
+            };
+
+            const confirmDelete = async () => {
+                const { type, id } = deleteDialog;
+                if (!id) return;
+                if (type === 'expense') setExpensesList(expensesList.filter(e => e.id !== id));
+                if (type === 'habit') setHabitualProducts(habitualProducts.filter(h => h.id !== id));
+                if (type === 'history') setHistoryList(historyList.filter(h => h.id !== id));
+                if (user && db && user.uid !== 'local-user') await window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, { expense: 'expenses', habit: 'habits', history: 'history' }[type], id));
+                setDeleteDialog({ isOpen: false, type: null, id: null, title: '' });
+            };
+
+            const handleArchive = async () => {
+                const saved = (parseFloat(savingsTarget)||0) + weeklyRem;
+                const timestamp = Date.now();
+                const newWeek = { id: timestamp, dateRange: `Semana ${new Date().toLocaleDateString()}`, savingsAchieved: saved, totalSpent: (parseFloat(fixedExpenses)||0) + spentTotal, isPenalty: weeklyRem < 0, timestamp };
+                setHistoryList([newWeek, ...historyList]); 
+                setExpensesList([]); 
+                setShowConfirmArchive(false); 
+                setView('history');
+                if (user && db && user.uid !== 'local-user') {
+                    await window.FB.addDoc(window.FB.collection(db, 'artifacts', appId, 'users', user.uid, 'history'), newWeek);
+                    const snap = await window.FB.getDocs(window.FB.collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'));
+                    await Promise.all(snap.docs.map(d => window.FB.deleteDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'expenses', d.id))));
+                }
+            };
+
+            const handleSaveBase = async (i, f, s) => { if (user && db && user.uid !== 'local-user') await window.FB.setDoc(window.FB.doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'main'), { income: i, fixedExpenses: f, savingsTarget: s }); };
+
+            if (loading) return <div className="min-h-screen bg-[#0f0f11] flex flex-col items-center justify-center"><AhorraYALogo className="w-20 h-20 mb-6 animate-pulse" /><span className="tracking-[0.5em] text-[10px] uppercase opacity-40">Iniciando...</span></div>;
+
+            return (
+                <div className="min-h-screen flex flex-col">
+                    <header className="sticky top-0 z-50 glass-header border-b border-white/5 px-6 safe-top pb-6 flex flex-col items-center shadow-2xl">
+                        <div className="w-full max-w-md flex items-center justify-between">
+                            <div className="flex items-center gap-3 -ml-6">
+                                <div className="bg-white p-1 rounded-xl shrink-0"><AhorraYALogo className="w-8 h-8 text-black" /></div>
+                                <h1 className="text-xl font-black tracking-tighter">AhorraYA</h1>
+                            </div>
+                            <div className="bg-white/10 border border-white/20 px-4 py-2 rounded-full flex items-center gap-2 active:scale-95 transition-all" onClick={() => setView('history')}>
+                                <Icons.trending />
+                                <span className="text-[11px] font-black" style={{ fontSize: getDynamicFontSize(formatCurrency(totalSavedOverall), '0.7rem', 12) }}>{formatCurrency(totalSavedOverall)}</span>
+                            </div>
+                        </div>
+                        <nav className="flex bg-black/60 p-1.5 rounded-[2rem] border border-white/5 w-full max-w-md mt-7">
+                            {[
+                                {id:'setup',i:Icons.setup,l:'BASE'}, 
+                                {id:'habits',i:Icons.habits,l:'HÁBITOS'}, 
+                                {id:'tracking',i:Icons.tracking,l:'GASTOS'}, 
+                                {id:'history',i:Icons.history,l:'LOGROS'}
+                            ].map(btn => (
+                                <button key={btn.id} onClick={() => setView(btn.id)} className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[1.5rem] transition-all ${view === btn.id ? 'bg-white text-black scale-105 shadow-xl font-bold' : 'text-slate-500'}`}>
+                                    <btn.i />
+                                    <span className="text-[8px] uppercase tracking-widest font-black">{btn.l}</span>
+                                </button>
+                            ))}
+                        </nav>
+                    </header>
+
+                    <main className="w-full max-w-md mx-auto p-6 space-y-10 flex-1 overflow-y-auto pb-[180px]">
+                        {view === 'setup' && (
+                            <div className="space-y-8 animate-in">
+                                <div className="bg-[#1a1b1e] border border-white/10 p-8 rounded-[3rem] space-y-7 shadow-2xl relative overflow-hidden">
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-3xl"></div>
+                                    <h2 className="text-[11px] font-black uppercase tracking-[0.3em] opacity-30 relative z-10">Plan Semanal</h2>
+                                    <div className="space-y-6 relative z-10">
+                                        <div><label className="text-[9px] font-bold text-slate-500 block mb-2 ml-4 uppercase">Ingreso</label><input type="number" inputMode="decimal" value={income} onChange={e=>{setIncome(e.target.value); handleSaveBase(e.target.value, fixedExpenses, savingsTarget);}} className="w-full bg-black/40 border border-white/10 rounded-3xl py-5 px-7 outline-none text-3xl font-black text-white focus:border-white/30" placeholder="$0" /></div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div><label className="text-[9px] font-bold text-slate-500 block mb-2 ml-4 uppercase">Fijos</label><input type="number" inputMode="decimal" value={fixedExpenses} onChange={e=>{setFixedExpenses(e.target.value); handleSaveBase(income, e.target.value, savingsTarget);}} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-5 outline-none font-bold text-white focus:border-white/30" /></div>
+                                            <div><label className="text-[9px] font-bold text-slate-500 block mb-2 ml-4 uppercase">Ahorro</label><input type="number" inputMode="decimal" value={savingsTarget} onChange={e=>{setSavingsTarget(e.target.value); handleSaveBase(income, fixedExpenses, e.target.value);}} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-5 outline-none font-bold text-white focus:border-white/30" /></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button onClick={()=>setShowConfirmArchive(true)} className="w-full bg-white text-black font-black py-6 rounded-[2.5rem] shadow-2xl flex items-center justify-center gap-2"><Icons.refresh /> REINICIAR SEMANA</button>
+                            </div>
+                        )}
+
+                        {view === 'habits' && (
+                            <div className="space-y-8 animate-in">
+                                <div className="bg-[#1a1b1e] border border-white/10 p-8 rounded-[3rem] space-y-6 shadow-2xl">
+                                    <h2 className="text-[11px] font-black uppercase tracking-widest opacity-30">Nuevo Atajo</h2>
+                                    <input type="text" placeholder="Concepto" value={tempHabit.name} onChange={e=>setTempHabit({...tempHabit, name: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+                                    <input type="number" inputMode="decimal" placeholder="Monto $" value={tempHabit.amount} onChange={e=>setTempHabit({...tempHabit, amount: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+                                    <button onClick={handleAddHabit} className="w-full bg-white text-black font-black py-4 rounded-3xl">AGREGAR A LISTA</button>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    {habitualProducts.map(p => (
+                                        <div key={p.id} className="relative group">
+                                            <button onClick={() => handleAddExpense(p.name, p.amount)} className="w-full bg-[#1a1b1e] border border-white/10 p-6 rounded-[2.5rem] text-left h-44 flex flex-col justify-between shadow-xl overflow-hidden active:scale-90 transition-all">
+                                                <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full blur-2xl"></div>
+                                                <div className="min-w-0 pr-4 z-10"><span className="text-[9px] font-bold text-slate-500 uppercase block mb-1 truncate">{p.name}</span><span className="font-black text-white tracking-tighter block truncate" style={{ fontSize: getDynamicFontSize(formatCurrency(p.amount).replace('MXN',''), '1.4rem', 6) }}>{formatCurrency(p.amount).replace('MXN','')}</span></div>
+                                                <div className="text-[8px] font-black bg-white/10 py-2 px-4 rounded-full w-fit z-10 uppercase font-bold tracking-widest">PAGAR</div>
+                                            </button>
+                                            <button onClick={()=>setDeleteDialog({isOpen:true,type:'habit',id:p.id,title:p.name})} className="absolute top-4 right-4 p-2 text-slate-700 z-20"><Icons.x /></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'tracking' && (
+                            <div className="space-y-8 animate-in">
+                                <div className="bg-[#1a1b1e] border border-white/10 p-8 rounded-[3rem] space-y-6 shadow-2xl">
+                                    <h2 className="text-[11px] font-black uppercase tracking-widest opacity-30">Gasto Único</h2>
+                                    <input type="text" placeholder="¿Qué compraste?" value={tempExp.name} onChange={e=>setTempExp({...tempExp, name: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+                                    <input type="number" inputMode="decimal" placeholder="Monto $" value={tempExp.amount} onChange={e=>setTempExp({...tempExp, amount: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+                                    <button onClick={() => handleAddExpense(tempExp.name, tempExp.amount)} className="w-full bg-white text-black font-black py-4 rounded-3xl active:scale-95 transition-all">REGISTRAR</button>
+                                </div>
+                                <div className="space-y-3">
+                                    {expensesList.map(e => (
+                                        <div key={e.id} className="flex justify-between items-center bg-[#1a1b1e] border border-white/5 p-6 rounded-3xl shadow-lg animate-in">
+                                            <div className="min-w-0 pr-4"><p className="font-black text-sm truncate">{e.name}</p><p className="text-[9px] text-slate-600 uppercase mt-0.5">{e.date}</p></div>
+                                            <div className="flex items-center gap-4 shrink-0"><p className="font-black" style={{ fontSize: getDynamicFontSize(formatCurrency(e.amount).replace('MXN',''), '1.1rem', 7) }}>-{formatCurrency(e.amount).replace('MXN','')}</p><button onClick={()=>setDeleteDialog({isOpen:true,type:'expense',id:e.id,title:e.name})} className="text-slate-700 p-2"><Icons.trash /></button></div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'history' && (
+                            <div className="space-y-8 animate-in">
+                                <div className={`p-10 rounded-[3.5rem] text-center shadow-2xl relative overflow-hidden ${totalSavedOverall >= 0 ? 'bg-black' : 'bg-red-950/40'}`}>
+                                    <div className="absolute top-0 right-0 w-40 h-40 bg-white/5 rounded-full blur-3xl"></div>
+                                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.4em] mb-4">Balance Acumulado</p>
+                                    <h2 className="font-black tracking-tighter break-all" style={{ fontSize: getDynamicFontSize(formatCurrency(totalSavedOverall), '4rem') }}>{formatCurrency(totalSavedOverall)}</h2>
+                                    <div className="mt-8 inline-flex items-center gap-2 px-5 py-2 rounded-full text-[10px] font-black border border-white/10 uppercase tracking-widest bg-white/5"><Icons.history /> Logros Guardados</div>
+                                </div>
+                                <div className="space-y-4">
+                                    {historyList.map(h => (
+                                        <div key={h.id} className="bg-[#1a1b1e] border border-white/5 p-6 rounded-2.5rem flex items-center justify-between shadow-xl">
+                                            <div className="flex items-center gap-4 min-w-0 pr-4"><div className={`p-3 rounded-2xl shrink-0 ${h.isPenalty ? 'bg-red-500/10 text-red-500' : 'bg-white/10 text-white'}`}>{h.isPenalty ? <Icons.alert /> : <Icons.check />}</div><div className="truncate"><p className="text-xs font-black uppercase truncate">{h.dateRange}</p><p className="text-[10px] text-slate-600 font-bold">Gasto: {formatCurrency(h.totalSpent)}</p></div></div>
+                                            <div className="flex items-center gap-4 shrink-0"><p className={`font-black ${h.savingsAchieved >= 0 ? 'text-white' : 'text-red-400'}`} style={{ fontSize: getDynamicFontSize(formatCurrency(h.savingsAchieved).replace('MXN',''), '1.3rem', 7) }}>{h.savingsAchieved >= 0 ? '+' : ''}{formatCurrency(h.savingsAchieved).replace('MXN','')}</p><button onClick={()=>setDeleteDialog({isOpen:true,type:'history',id:h.id,title:h.dateRange})} className="p-2 text-slate-700"><Icons.trash /></button></div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* DASHBOARD INFERIOR COMPACTO - CORREGIDO */}
+                    <section className={`fixed bottom-0 left-0 w-full px-6 safe-bottom transition-all duration-700 z-[60] ${income ? 'translate-y-0 opacity-100' : 'translate-y-48 opacity-0'}`}>
+                        <div className={`p-4 rounded-[2.2rem] border border-white/10 backdrop-blur-3xl max-w-md mx-auto shadow-[0_-20px_50px_-10px_rgba(0,0,0,1)] relative overflow-hidden ${isNegative ? 'bg-red-950/95' : 'bg-[#121317]/95'}`}>
+                            <div className="text-center relative z-10">
+                                <p className={`text-[8px] font-black uppercase tracking-[0.2em] mb-1 ${isNegative ? 'text-red-500' : 'opacity-30'}`}>
+                                    {isNegative ? 'Sobregiro' : 'Diario Disponible'}
+                                </p>
+                                <div className="flex items-center justify-center gap-3">
+                                    <h2 className="font-black text-white tracking-tighter" style={{ fontSize: getDynamicFontSize(formatCurrency(isNegative ? Math.abs(weeklyRem) : daily).replace('MXN',''), '1.8rem') }}>
+                                        {formatCurrency(isNegative ? Math.abs(weeklyRem) : daily).replace('MXN','')}
+                                    </h2>
+                                    <div className="h-4 w-px bg-white/10"></div>
+                                    <span className="text-[10px] font-bold opacity-40 uppercase tracking-tighter">Sobra: {formatCurrency(weeklyRem).replace('MXN','')}</span>
+                                </div>
+                            </div>
+                            <div className="w-1/2 mx-auto h-1 bg-white/5 rounded-full mt-3 overflow-hidden relative border border-white/5">
+                                <div className={`h-full transition-all duration-1000 ${isNegative ? 'bg-red-600 w-full' : 'bg-white'}`} style={{ width: isNegative ? '100%' : `${Math.min((daily/((parseFloat(income)||1)/7))*100,100)}%` }}></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Modales */}
+                    {showConfirmArchive && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center px-6 bg-black/90 backdrop-blur-md animate-in"><div className="bg-[#1a1b1e] border border-white/10 p-10 rounded-[3.5rem] w-full max-w-sm shadow-2xl text-center space-y-6"><AhorraYALogo className="w-12 h-12 mx-auto" /><h3 className="text-xl font-black">¿Archivar Semana?</h3><p className="text-sm text-slate-500">Tus gastos se borrarán y el balance se guardará permanentemente.</p><div className="flex gap-4"><button onClick={()=>setShowConfirmArchive(false)} className="flex-1 py-4 bg-white/10 rounded-2xl font-bold">VOLVER</button><button onClick={handleArchive} className="flex-[2] py-4 bg-white text-black rounded-2xl font-black shadow-xl active:scale-95 transition-all">SÍ, ARCHIVAR</button></div></div></div>
+                    )}
+                    {deleteDialog.isOpen && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center px-6 bg-black/90 backdrop-blur-md animate-in"><div className="bg-[#1a1b1e] border border-red-500/20 p-10 rounded-[3.5rem] w-full max-w-sm shadow-2xl text-center space-y-6"><div className="text-red-500 flex justify-center"><Icons.alert /></div><h3 className="text-xl font-black uppercase tracking-tight">¿Eliminar?</h3><p className="text-sm text-slate-500">Estás por borrar: <br/><span className="text-white font-bold">"{deleteDialog.title}"</span></p><div className="flex gap-4 pt-2"><button onClick={()=>setDeleteDialog({isOpen:false,type:null,id:null,title:''})} className="flex-1 py-4 bg-white/10 rounded-2xl font-bold">CANCELAR</button><button onClick={confirmDelete} className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-black shadow-lg">ELIMINAR</button></div></div></div>
+                    )}
+                </div>
+            );
+        };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

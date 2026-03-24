@@ -1,0 +1,555 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { 
+  LayoutGrid, 
+  Repeat, 
+  PlusCircle, 
+  History, 
+  TrendingUp, 
+  Trash2, 
+  X, 
+  RefreshCcw, 
+  AlertTriangle, 
+  CheckCircle2,
+  PieChart,
+  Utensils,
+  Car,
+  Ticket,
+  ShoppingBag,
+  MoreHorizontal,
+  ChevronRight,
+  ArrowLeft,
+  BarChart3,
+  CloudCheck
+} from 'lucide-react';
+
+// Firebase configuration
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'ahorraya-v7-stable';
+
+const CATEGORIES = {
+  comida: { label: 'Comida', color: '#10b981', icon: <Utensils size={16} /> },
+  transporte: { label: 'Transporte', color: '#3b82f6', icon: <Car size={16} /> },
+  entretenimiento: { label: 'Salidas', color: '#8b5cf6', icon: <Ticket size={16} /> },
+  compras: { label: 'Compras', color: '#f59e0b', icon: <ShoppingBag size={16} /> },
+  otros: { label: 'Otros', color: '#64748b', icon: <MoreHorizontal size={16} /> },
+};
+
+const AhorraYALogo = ({ className }) => (
+  <svg viewBox="0 0 100 100" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="50" cy="50" r="46" stroke="currentColor" strokeWidth="5"/>
+    <g transform="translate(42, 18) rotate(-10)">
+      <rect width="26" height="34" rx="2" fill="currentColor" />
+      <circle cx="6" cy="6" r="3" fill="#1a1b1e" />
+      <circle cx="20" cy="28" r="3" fill="#1a1b1e" />
+    </g>
+    <rect x="24" y="44" width="52" height="38" rx="10" fill="currentColor" />
+    <rect x="29" y="44" width="42" height="3.5" rx="1.5" fill="#1a1b1e" />
+  </svg>
+);
+
+export default function App() {
+  const [view, setView] = useState('loading'); // Nuevo estado inicial para evitar parpadeos
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  const [income, setIncome] = useState('');
+  const [fixedExpenses, setFixedExpenses] = useState('');
+  const [savingsTarget, setSavingsTarget] = useState('');
+  const [expensesList, setExpensesList] = useState([]);
+  const [habitualProducts, setHabitualProducts] = useState([]);
+  const [historyList, setHistoryList] = useState([]);
+
+  const [showConfirmArchive, setShowConfirmArchive] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState({ isOpen: false, type: null, id: null, title: '' });
+  const [tempHabit, setTempHabit] = useState({ name: '', amount: '', category: 'otros' });
+  const [tempExp, setTempExp] = useState({ name: '', amount: '', category: 'comida' });
+
+  // 1. Auth Logic - Persistente
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (!u) setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Data Sync & Redirect Logic
+  useEffect(() => {
+    if (!user) return;
+
+    // Fetch Settings y decidir vista inicial
+    const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'main'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        setIncome(d.income || ''); 
+        setFixedExpenses(d.fixedExpenses || ''); 
+        setSavingsTarget(d.savingsTarget || '');
+        
+        // Si ya hay ingresos, vamos a Gastos, si no a Setup
+        if (d.income && view === 'loading') {
+          setView('tracking');
+        } else if (!d.income && view === 'loading') {
+          setView('setup');
+        }
+      } else {
+        if (view === 'loading') setView('setup');
+      }
+      setLoading(false);
+    }, () => setLoading(false));
+
+    // El resto de los listeners igual
+    const unsubExp = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'), (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setExpensesList(list.sort((a,b) => b.timestamp - a.timestamp));
+    });
+
+    const unsubHabits = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'habits'), (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setHabitualProducts(list);
+    });
+
+    const unsubHist = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setHistoryList(list.sort((a,b) => b.timestamp - a.timestamp));
+    });
+
+    return () => {
+      unsubSettings(); unsubExp(); unsubHabits(); unsubHist();
+    };
+  }, [user]);
+
+  // Calculations
+  const totalSavedOverall = useMemo(() => historyList.reduce((acc, curr) => acc + (curr.savingsAchieved || 0), 0), [historyList]);
+  const spentTotal = useMemo(() => expensesList.reduce((acc, curr) => acc + curr.amount, 0), [expensesList]);
+  const weeklyRem = useMemo(() => (parseFloat(income)||0) - (parseFloat(fixedExpenses)||0) - (parseFloat(savingsTarget)||0) - spentTotal, [income, fixedExpenses, savingsTarget, spentTotal]);
+  const daily = weeklyRem / 7;
+  const isNegative = weeklyRem < 0;
+
+  const categoryStats = useMemo(() => {
+    const total = expensesList.reduce((acc, curr) => acc + curr.amount, 0);
+    return Object.keys(CATEGORIES).map(key => {
+      const catTotal = expensesList
+        .filter(e => e.category === key)
+        .reduce((acc, curr) => acc + curr.amount, 0);
+      return {
+        ...CATEGORIES[key],
+        total: catTotal,
+        percent: total > 0 ? (catTotal / total) * 100 : 0
+      };
+    }).sort((a, b) => b.total - a.total);
+  }, [expensesList]);
+
+  const formatCurrency = (num) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(num);
+
+  const handleAddExpense = async (name, amount, catKey) => {
+    if (!name || !amount || !user) return;
+    const val = parseFloat(amount);
+    const timestamp = Date.now();
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'), { 
+      name, 
+      amount: val, 
+      category: catKey,
+      timestamp, 
+      date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+    });
+    setTempExp({ name: '', amount: '', category: 'comida' });
+  };
+
+  const handleAddHabit = async () => {
+    if (!tempHabit.name || !tempHabit.amount || !user) return;
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'habits'), { 
+      name: tempHabit.name, 
+      amount: parseFloat(tempHabit.amount),
+      category: tempHabit.category
+    });
+    setTempHabit({ name: '', amount: '', category: 'otros' });
+  };
+
+  const confirmDelete = async () => {
+    const { type, id } = deleteDialog;
+    if (!id || !user) return;
+    const path = { expense: 'expenses', habit: 'habits', history: 'history' }[type];
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, path, id));
+    setDeleteDialog({ isOpen: false, type: null, id: null, title: '' });
+  };
+
+  const handleArchive = async () => {
+    if (!user) return;
+    const saved = (parseFloat(savingsTarget)||0) + weeklyRem;
+    const timestamp = Date.now();
+    const newWeek = { 
+      id: timestamp, 
+      dateRange: `Semana ${new Date().toLocaleDateString()}`, 
+      savingsAchieved: saved, 
+      totalSpent: (parseFloat(fixedExpenses)||0) + spentTotal, 
+      isPenalty: weeklyRem < 0, 
+      timestamp 
+    };
+    
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), newWeek);
+    const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'expenses'));
+    for (const d of snap.docs) {
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'expenses', d.id));
+    }
+    setShowConfirmArchive(false); 
+    setView('history');
+  };
+
+  const handleSaveBase = async (i, f, s) => { 
+    if (!user) return;
+    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'main'), { 
+      income: i, 
+      fixedExpenses: f, 
+      savingsTarget: s 
+    }); 
+  };
+
+  if (loading || view === 'loading') return (
+    <div className="min-h-screen bg-[#0f0f11] flex flex-col items-center justify-center">
+      <AhorraYALogo className="w-20 h-20 mb-6 animate-pulse text-white" />
+      <span className="tracking-[0.5em] text-[10px] uppercase opacity-40 text-white font-bold">Sincronizando...</span>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#0f0f11] text-white flex flex-col font-sans selection:bg-white selection:text-black">
+      {/* Header Fijo */}
+      <header className="sticky top-0 z-50 bg-[#16161a]/95 backdrop-blur-2xl border-b border-white/5 px-6 pt-12 pb-6 flex flex-col items-center shadow-2xl">
+        <div className="w-full max-w-md flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-white p-1 rounded-xl shrink-0"><AhorraYALogo className="w-8 h-8 text-black" /></div>
+            <h1 className="text-xl font-black tracking-tighter italic">AhorraYA!</h1>
+          </div>
+          <div className="bg-white/10 border border-white/20 px-4 py-2 rounded-full flex items-center gap-2 active:scale-95 transition-all" onClick={() => setView('stats')}>
+            <BarChart3 size={16} className="text-emerald-400" />
+            <span className="text-[11px] font-black">{formatCurrency(totalSavedOverall)}</span>
+          </div>
+        </div>
+        
+        <nav className="flex bg-black/60 p-1.5 rounded-[2rem] border border-white/5 w-full max-w-md mt-7">
+          {[
+            {id:'setup', icon: <LayoutGrid size={20}/>, label:'BASE'}, 
+            {id:'habits', icon: <Repeat size={20}/>, label:'ATajos'}, 
+            {id:'tracking', icon: <PlusCircle size={20}/>, label:'GASTOS'}, 
+            {id:'history', icon: <History size={20}/>, label:'HISTORIAL'}
+          ].map(btn => (
+            <button 
+              key={btn.id} 
+              onClick={() => setView(btn.id)} 
+              className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[1.5rem] transition-all ${view === btn.id || (view === 'stats' && btn.id === 'history') ? 'bg-white text-black scale-105 shadow-xl font-bold' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              {btn.icon}
+              <span className="text-[8px] uppercase tracking-widest font-black">{btn.label}</span>
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      <main className="w-full max-w-md mx-auto p-6 space-y-10 flex-1 overflow-y-auto pb-[180px]">
+        {view === 'setup' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="bg-[#1a1b1e] border border-white/10 p-8 rounded-[3rem] space-y-7 shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-3xl"></div>
+              <div className="flex justify-between items-center relative z-10">
+                <h2 className="text-[11px] font-black uppercase tracking-[0.3em] opacity-30">Plan Semanal</h2>
+                <div className="flex items-center gap-1 text-[9px] font-black text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full uppercase italic">
+                   En la nube
+                </div>
+              </div>
+              <div className="space-y-6 relative z-10">
+                <div>
+                  <label className="text-[9px] font-bold text-slate-500 block mb-2 ml-4 uppercase tracking-widest">Ingreso Total</label>
+                  <input 
+                    type="number" 
+                    value={income} 
+                    onChange={e=>{setIncome(e.target.value); handleSaveBase(e.target.value, fixedExpenses, savingsTarget);}} 
+                    className="w-full bg-black/40 border border-white/10 rounded-3xl py-5 px-7 outline-none text-3xl font-black text-white focus:border-white/30" 
+                    placeholder="$0" 
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-500 block mb-2 ml-4 uppercase tracking-widest">Gastos Fijos</label>
+                    <input type="number" value={fixedExpenses} onChange={e=>{setFixedExpenses(e.target.value); handleSaveBase(income, e.target.value, savingsTarget);}} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-5 outline-none font-bold text-white focus:border-white/30" />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-500 block mb-2 ml-4 uppercase tracking-widest">Meta Ahorro</label>
+                    <input type="number" value={savingsTarget} onChange={e=>{setSavingsTarget(e.target.value); handleSaveBase(income, fixedExpenses, e.target.value);}} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-5 outline-none font-bold text-white focus:border-white/30" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button onClick={()=>setShowConfirmArchive(true)} className="w-full bg-white text-black font-black py-6 rounded-[2.5rem] shadow-2xl flex items-center justify-center gap-2 hover:bg-slate-200 transition-colors">
+              <RefreshCcw size={20} /> REINICIAR SEMANA
+            </button>
+          </div>
+        )}
+
+        {view === 'habits' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
+            <div className="bg-[#1a1b1e] border border-white/10 p-8 rounded-[3rem] space-y-4 shadow-2xl">
+              <h2 className="text-[11px] font-black uppercase tracking-widest opacity-30">Nuevo Atajo</h2>
+              <input type="text" placeholder="Concepto" value={tempHabit.name} onChange={e=>setTempHabit({...tempHabit, name: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+              <div className="flex gap-2">
+                <input type="number" placeholder="Monto $" value={tempHabit.amount} onChange={e=>setTempHabit({...tempHabit, amount: e.target.value})} className="w-2/3 bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+                <select value={tempHabit.category} onChange={e=>setTempHabit({...tempHabit, category: e.target.value})} className="w-1/3 bg-black/40 border border-white/10 rounded-2xl px-2 outline-none font-bold text-xs">
+                  {Object.entries(CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <button onClick={handleAddHabit} className="w-full bg-white text-black font-black py-4 rounded-3xl">AGREGAR A LISTA</button>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              {habitualProducts.map(p => (
+                <div key={p.id} className="relative group">
+                  <button onClick={() => handleAddExpense(p.name, p.amount, p.category || 'otros')} className="w-full bg-[#1a1b1e] border border-white/10 p-6 rounded-[2.5rem] text-left h-44 flex flex-col justify-between shadow-xl active:scale-90 transition-all overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full blur-2xl"></div>
+                    <div className="z-10">
+                      <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">{p.name}</span>
+                      <span className="font-black text-white text-2xl tracking-tighter block">{formatCurrency(p.amount).replace('MXN','')}</span>
+                    </div>
+                    <div className="text-[8px] font-black bg-white/10 py-2 px-4 rounded-full w-fit z-10 uppercase tracking-widest flex items-center gap-1">
+                      {CATEGORIES[p.category || 'otros'].icon} PAGAR
+                    </div>
+                  </button>
+                  <button onClick={()=>setDeleteDialog({isOpen:true,type:'habit',id:p.id,title:p.name})} className="absolute top-4 right-4 p-2 text-slate-700 z-20 hover:text-red-500"><X size={18}/></button>
+                </div>
+              ))}
+              {habitualProducts.length === 0 && (
+                <div className="col-span-2 text-center py-10 opacity-20 italic text-sm border-2 border-dashed border-white/10 rounded-[2.5rem]">Agrega atajos para pagar rápido</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {view === 'tracking' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
+            <div className="bg-[#1a1b1e] border border-white/10 p-8 rounded-[3rem] space-y-4 shadow-2xl">
+              <h2 className="text-[11px] font-black uppercase tracking-widest opacity-30">Gasto Único</h2>
+              <input type="text" placeholder="¿Qué compraste?" value={tempExp.name} onChange={e=>setTempExp({...tempExp, name: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+              <div className="flex gap-2">
+                <input type="number" placeholder="Monto $" value={tempExp.amount} onChange={e=>setTempExp({...tempExp, amount: e.target.value})} className="w-1/2 bg-black/40 border border-white/10 rounded-2xl py-4 px-6 outline-none font-bold text-white" />
+                <select value={tempExp.category} onChange={e=>setTempExp({...tempExp, category: e.target.value})} className="w-1/2 bg-black/40 border border-white/10 rounded-2xl px-4 outline-none font-bold text-xs">
+                  {Object.entries(CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <button onClick={() => handleAddExpense(tempExp.name, tempExp.amount, tempExp.category)} className="w-full bg-white text-black font-black py-4 rounded-3xl active:scale-95 transition-all">REGISTRAR</button>
+            </div>
+            <div className="space-y-3">
+              {expensesList.map(e => (
+                <div key={e.id} className="flex justify-between items-center bg-[#1a1b1e] border border-white/5 p-6 rounded-3xl shadow-lg animate-in group">
+                  <div className="flex items-center gap-4">
+                    <div className="p-3 rounded-2xl bg-white/5 text-slate-400">
+                      {CATEGORIES[e.category || 'otros'].icon}
+                    </div>
+                    <div>
+                      <p className="font-black text-sm uppercase tracking-tight">{e.name}</p>
+                      <p className="text-[9px] text-slate-600 uppercase mt-0.5 font-bold">{CATEGORIES[e.category || 'otros'].label} • {e.date}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <p className="font-black text-lg text-white">-{formatCurrency(e.amount).replace('MXN','')}</p>
+                    <button onClick={()=>setDeleteDialog({isOpen:true,type:'expense',id:e.id,title:e.name})} className="text-slate-700 hover:text-red-500 p-2 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={18}/></button>
+                  </div>
+                </div>
+              ))}
+              {expensesList.length === 0 && (
+                <div className="text-center py-20 opacity-20 italic text-sm">Sin gastos registrados en esta semana.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {view === 'history' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
+            {/* Botón a Estadísticas */}
+            <button 
+              onClick={() => setView('stats')}
+              className="w-full bg-white p-6 rounded-[2.5rem] flex items-center justify-between shadow-2xl hover:scale-[1.02] active:scale-95 transition-all group"
+            >
+              <div className="flex items-center gap-4">
+                <div className="bg-black p-3 rounded-2xl text-white">
+                  <BarChart3 size={24} />
+                </div>
+                <div className="text-left">
+                  <p className="text-black font-black text-lg tracking-tight italic">Estadísticas</p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Análisis por categorías</p>
+                </div>
+              </div>
+              <div className="bg-slate-100 p-2 rounded-full text-black group-hover:translate-x-1 transition-transform">
+                <ChevronRight size={20} />
+              </div>
+            </button>
+
+            {/* Balance Acumulado */}
+            <div className={`p-10 rounded-[3.5rem] text-center shadow-2xl relative overflow-hidden border ${totalSavedOverall >= 0 ? 'bg-black border-white/10' : 'bg-red-950/40 border-red-500/20'}`}>
+              <div className="absolute top-0 right-0 w-40 h-40 bg-white/5 rounded-full blur-3xl"></div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.4em] mb-4">Ahorro Histórico</p>
+              <h2 className="text-5xl font-black tracking-tighter italic">{formatCurrency(totalSavedOverall)}</h2>
+              <div className="mt-8 inline-flex items-center gap-2 px-5 py-2 rounded-full text-[10px] font-black border border-white/10 uppercase tracking-widest bg-white/5">
+                <CheckCircle2 size={14} className="text-emerald-500" /> Sincronizado en la nube
+              </div>
+            </div>
+
+            {/* Lista de Semanas */}
+            <div className="space-y-4">
+              <h3 className="text-[11px] font-black uppercase tracking-[0.3em] opacity-30 ml-4">Registros Pasados</h3>
+              {historyList.map(h => (
+                <div key={h.id} className="bg-[#1a1b1e] border border-white/5 p-6 rounded-[2.5rem] flex items-center justify-between shadow-xl group">
+                  <div className="flex items-center gap-4">
+                    <div className={`p-3 rounded-2xl ${h.isPenalty ? 'bg-red-500/10 text-red-500' : 'bg-white/10 text-white'}`}>
+                      {h.isPenalty ? <AlertTriangle size={20} /> : <CheckCircle2 size={20} />}
+                    </div>
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-tighter">{h.dateRange}</p>
+                      <p className="text-[10px] text-slate-600 font-bold">Gastado: {formatCurrency(h.totalSpent)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <p className={`font-black text-xl ${h.savingsAchieved >= 0 ? 'text-white' : 'text-red-400'}`}>
+                      {h.savingsAchieved >= 0 ? '+' : ''}{formatCurrency(h.savingsAchieved).replace('MXN','')}
+                    </p>
+                    <button onClick={()=>setDeleteDialog({isOpen:true,type:'history',id:h.id,title:h.dateRange})} className="p-2 text-slate-700 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={18}/></button>
+                  </div>
+                </div>
+              ))}
+              {historyList.length === 0 && (
+                <div className="text-center py-20 opacity-20 italic text-sm">No hay semanas archivadas aún.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {view === 'stats' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-right-4">
+            <button 
+              onClick={() => setView('history')}
+              className="flex items-center gap-2 text-slate-500 font-bold text-xs uppercase tracking-widest hover:text-white transition-colors"
+            >
+              <ArrowLeft size={16} /> Volver al Historial
+            </button>
+
+            <div className="bg-[#1a1b1e] border border-white/10 p-8 rounded-[3.5rem] shadow-2xl space-y-8">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <h2 className="text-xl font-black italic tracking-tight">Estadísticas</h2>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Semana Actual</p>
+                </div>
+                <div className="bg-white/5 p-4 rounded-3xl text-emerald-400">
+                  <PieChart size={24} />
+                </div>
+              </div>
+
+              <div className="space-y-7">
+                {categoryStats.filter(c => c.total > 0).map(cat => (
+                  <div key={cat.label} className="space-y-3">
+                    <div className="flex justify-between items-end">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-xl bg-white/5" style={{ color: cat.color }}>
+                          {cat.icon}
+                        </div>
+                        <span className="text-sm font-bold text-slate-300">{cat.label}</span>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-black text-sm">{formatCurrency(cat.total)}</p>
+                        <p className="text-[10px] font-bold text-slate-600">{Math.round(cat.percent)}%</p>
+                      </div>
+                    </div>
+                    <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full rounded-full transition-all duration-1000 ease-out"
+                        style={{ width: `${cat.percent}%`, backgroundColor: cat.color }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                
+                {expensesList.length === 0 && (
+                  <div className="text-center py-10 space-y-4">
+                    <div className="bg-white/5 w-16 h-16 rounded-full flex items-center justify-center mx-auto opacity-20">
+                      <PieChart size={32} />
+                    </div>
+                    <p className="text-sm text-slate-600 italic">Registra gastos para analizar tu semana.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Widget Flotante Inferior */}
+      {(view === 'setup' || view === 'tracking' || view === 'habits') && income && (
+        <section className={`fixed bottom-0 left-0 w-full px-6 pb-12 transition-all duration-700 z-[60] animate-in slide-in-from-bottom-10`}>
+          <div className={`p-5 rounded-[2.2rem] border border-white/10 backdrop-blur-3xl max-w-md mx-auto shadow-[0_-20px_50px_-10px_rgba(0,0,0,0.8)] relative overflow-hidden ${isNegative ? 'bg-red-950/95' : 'bg-[#121317]/95'}`}>
+            <div className="text-center relative z-10">
+              <p className={`text-[9px] font-black uppercase tracking-[0.2em] mb-1 ${isNegative ? 'text-red-500' : 'text-slate-400'}`}>
+                {isNegative ? 'Límite Excedido' : 'Diario Disponible'}
+              </p>
+              <div className="flex items-center justify-center gap-3">
+                <h2 className="text-4xl font-black text-white tracking-tighter italic">
+                  {formatCurrency(isNegative ? Math.abs(weeklyRem) : daily).replace('MXN','')}
+                </h2>
+                <div className="h-5 w-px bg-white/10"></div>
+                <div className="text-left">
+                   <p className="text-[10px] font-bold opacity-40 uppercase">Sobra:</p>
+                   <p className={`text-xs font-black ${isNegative ? 'text-red-400' : 'text-emerald-400'}`}>
+                     {formatCurrency(weeklyRem).replace('MXN','')}
+                   </p>
+                </div>
+              </div>
+            </div>
+            <div className="w-1/3 mx-auto h-1.5 bg-white/5 rounded-full mt-4 overflow-hidden relative">
+              <div 
+                className={`h-full transition-all duration-1000 ${isNegative ? 'bg-red-600' : 'bg-emerald-500'}`} 
+                style={{ width: isNegative ? '100%' : `${Math.min((daily/((parseFloat(income)||1)/7))*100, 100)}%` }}
+              ></div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Modales */}
+      {showConfirmArchive && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-[#1a1b1e] border border-white/10 p-10 rounded-[3.5rem] w-full max-w-sm shadow-2xl text-center space-y-6">
+            <AhorraYALogo className="w-12 h-12 mx-auto text-white" />
+            <h3 className="text-xl font-black">¿Archivar Semana?</h3>
+            <p className="text-sm text-slate-500">Tus gastos actuales se guardarán permanentemente en tu historial en la nube.</p>
+            <div className="flex gap-4">
+              <button onClick={()=>setShowConfirmArchive(false)} className="flex-1 py-4 bg-white/10 rounded-2xl font-bold">VOLVER</button>
+              <button onClick={handleArchive} className="flex-[2] py-4 bg-white text-black rounded-2xl font-black shadow-xl active:scale-95 transition-all">SÍ, ARCHIVAR</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteDialog.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-[#1a1b1e] border border-red-500/20 p-10 rounded-[3.5rem] w-full max-w-sm shadow-2xl text-center space-y-6">
+            <div className="text-red-500 flex justify-center"><AlertTriangle size={32} /></div>
+            <h3 className="text-xl font-black uppercase tracking-tight">¿Eliminar?</h3>
+            <p className="text-sm text-slate-500">Esta acción no se puede deshacer. Se borrará:<br/><span className="text-white font-bold">"{deleteDialog.title}"</span></p>
+            <div className="flex gap-4 pt-2">
+              <button onClick={()=>setDeleteDialog({isOpen:false,type:null,id:null,title:''})} className="flex-1 py-4 bg-white/10 rounded-2xl font-bold">CANCELAR</button>
+              <button onClick={confirmDelete} className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-black shadow-lg">ELIMINAR</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
